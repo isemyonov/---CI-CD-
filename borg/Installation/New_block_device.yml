@@ -1,0 +1,56 @@
+---
+
+- name: Detect and mount new block device
+  hosts: all
+  become: yes
+  vars:
+    mount_point: /BorgBackup
+    device_name: sdb  # Замените это значение на фактическое имя нового устройства, если оно известно
+
+  tasks:
+
+    - name: Enable and start chronyd service
+      systemd:
+        name: chronyd
+        state: started
+        enabled: yes
+
+    - name: Ensure time is synchronized
+      command: chronyc -a makestep
+      register: chronyc_output
+
+    - name: Check time synchronization output
+      debug:
+        msg: "{{ chronyc_output.stdout }}"
+
+    - name: Create partition on the new device
+      parted:
+        device: "/dev/{{ device_name }}"
+        number: 1
+        state: present
+        part_type: primary
+
+    - name: Format the new partition with ext4
+      filesystem:
+        fstype: ext4
+        dev: "/dev/{{ device_name }}1"
+
+    - name: Create mount point directory
+      file:
+        path: "{{ mount_point }}"
+        state: directory
+
+    - name: Mount the new partition
+      mount:
+        src: "/dev/{{ device_name }}1"
+        path: "{{ mount_point }}"
+        fstype: ext4
+        state: mounted
+
+    - name: Ensure mount persists across reboots
+      mount:
+        src: "/dev/{{ device_name }}1"
+        path: "{{ mount_point }}"
+        fstype: ext4
+        opts: defaults
+        state: present

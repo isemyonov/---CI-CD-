@@ -1,0 +1,57 @@
+---
+- name: Install and configure BorgBackup server
+  hosts: all
+  become: true
+
+  vars:
+    ssh_public_key_src: /home/semaphore/ssh/borgbackup/id_rsa.pub
+    ssh_public_key_dest: /home/borguser/.ssh/authorized_keys
+    mount_point: /BorgBackup
+
+  tasks:
+    - name: Ensure the extra packages for Enterprise Linux (EPEL) repository is present
+      yum:
+        name: epel-release
+        state: present
+
+    - name: Install BorgBackup
+      yum:
+        name: borgbackup
+        state: present
+
+    - name: Create Borg user
+      user:
+        name: borguser
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Ensure /BorgBackup directory exists with correct permissions
+      file:
+        path: "{{ mount_point }}"
+        state: directory
+        owner: borguser
+        group: borguser
+        mode: '0755'
+
+    - name: Ensure .ssh directory exists for borguser
+      file:
+        path: /home/borguser/.ssh
+        state: directory
+        owner: borguser
+        group: borguser
+        mode: '0700'
+
+    - name: Copy SSH public key to server for borguser
+      copy:
+        src: "{{ ssh_public_key_src }}"
+        dest: "{{ ssh_public_key_dest }}"
+        owner: borguser
+        group: borguser
+        mode: '0600'
+      notify: reload_ssh
+
+  handlers:
+    - name: reload_ssh
+      service:
+        name: sshd
+        state: reloaded

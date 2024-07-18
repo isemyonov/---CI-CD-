@@ -1,0 +1,57 @@
+---
+- name: Install and configure Filebeat
+  hosts: all
+  become: yes
+  tasks:
+
+    - name: Install EPEL repository
+      yum:
+        name: epel-release
+        state: present
+
+    - name: Add Elasticsearch repo file
+      copy:
+        content: |
+          [elasticsearch]
+          name=Elasticsearch repository for 7.x packages
+          baseurl=https://artifacts.elastic.co/packages/7.x/yum
+          gpgcheck=1
+          gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+          enabled=1
+          autorefresh=1
+          type=rpm-md
+        dest: /etc/yum.repos.d/elasticsearch.repo
+
+    - name: Import GPG key for Elasticsearch
+      rpm_key:
+        key: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        state: present
+
+    - name: Install Filebeat
+      yum:
+        name: filebeat
+        state: present
+
+    - name: Configure Filebeat to start on boot
+      service:
+        name: filebeat
+        enabled: yes
+
+    - name: Set up Filebeat configuration
+      template:
+        src: filebeat.yml
+        dest: /etc/filebeat/filebeat.yml
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ensure Filebeat is started
+      service:
+        name: filebeat
+        state: started
+
+  handlers:
+    - name: Restart Filebeat
+      service:
+        name: filebeat
+        state: restarted

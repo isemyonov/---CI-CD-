@@ -1,0 +1,264 @@
+- name: Установка ELK в Docker
+  hosts: all
+  become: true
+  tasks:
+    
+    - name: Установить необходимые системные пакеты
+      ansible.builtin.yum:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
+
+    - name: Добавить репозиторий Docker CE
+      ansible.builtin.yum_repository:
+        name: docker-ce
+        description: Docker CE Repository
+        baseurl: https://download.docker.com/linux/centos/9/x86_64/stable
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: yes
+
+    - name: Установить Docker CE
+      ansible.builtin.yum:
+        name: docker-ce
+        state: present
+
+    - name: Запустить и включить службу Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Получить архитектуру системы
+      ansible.builtin.command:
+        cmd: uname -m
+      register: uname_arch
+
+    - name: Получить тип операционной системы
+      ansible.builtin.command:
+        cmd: uname -s
+      register: uname_os
+
+    - name: Установить URL-адрес для загрузки Docker Compose
+      set_fact:
+        docker_compose_url: "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-{{ uname_os.stdout }}-{{ uname_arch.stdout }}"
+
+    - name: Скачать Docker Compose
+      ansible.builtin.get_url:
+        url: "{{ docker_compose_url }}"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Проверить установку Docker Compose
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose --version
+      register: docker_compose_version
+      failed_when: docker_compose_version.rc != 0
+      changed_when: false
+
+
+    - name: Создать каталоги для ELK
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0777'
+      with_items:
+        - /opt/elk
+        - /opt/elk/elasticsearch/config
+        - /opt/elk/elasticsearch/data
+        - /opt/elk/logstash/config
+        - /opt/elk/logstash/pipeline
+        - /opt/elk/kibana
+
+    - name: Создать конфигурационный файл elasticsearch.yml
+      ansible.builtin.copy:
+        dest: /opt/elk/elasticsearch/elasticsearch.yml
+        content: |
+          cluster.name: "elk"
+          network.host: 0.0.0.0 # Для корректной работы внутри контейнера
+          xpack.security.enabled: true # Для поддержки функционала, обеспечивающего безопасность кластера
+          xpack.license.self_generated.type: basic # Тип лицензии "basic" для наших нужд хватит с головой
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создать конфигурационный файл log4j2.properties для Elasticsearch
+      ansible.builtin.copy:
+        dest: /opt/elk/elasticsearch/log4j2.properties
+        content: |
+          status = error
+          appender.console.type = Console
+          appender.console.name = console
+          appender.console.layout.type = PatternLayout
+          appender.console.layout.pattern = [%d{ISO8601}][%-5p][%-25c] %marker%m%n
+          rootLogger.level = info
+          rootLogger.appenderRef.console.ref = console
+        owner: root
+        group: root
+        mode: '0644'
+    
+    - name: Создать конфигурационный файл jvm.options для Elasticsearch
+      ansible.builtin.copy:
+        dest: /opt/elk/elasticsearch/config/jvm.options
+        content: |
+          -Xmx2g
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создать конфигурационный файл logstash.conf
+      ansible.builtin.copy:
+        dest: /opt/elk/logstash/pipeline/logstash.conf
+        content: |
+          input {
+            beats {
+              port => 5044
+            }
+          }
+
+          filter {
+            if [type] == "syslog" {
+              grok {
+                match => { "message" => "%{SYSLOGTIMESTAMP:syslog_timestamp} %{SYSLOGHOST:syslog_hostname} %{DATA:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}" }
+                add_field => [ "received_at", "%{@timestamp}" ]
+                add_field => [ "received_from", "%{host}" ]
+              }
+              date {
+                match => [ "syslog_timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
+              }
+            }
+          }
+
+          output {
+            elasticsearch {
+              hosts => ["192.168.1.139:9200"]
+              user => "elastic"
+              password => "MyPw123"
+              manage_template => false
+              index => "logs_123"
+            }
+          }
+        owner: root
+        group: root
+        mode: '0644'
+    
+    - name: Создать конфигурационный файл logstash.yml
+      ansible.builtin.copy:
+        dest: /opt/elk/logstash/config/logstash.yml
+        content: |
+          http.host: "0.0.0.0"
+          path.config: /usr/share/logstash/pipeline
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создать конфигурационный файл log4j2.properties для Logstash
+      ansible.builtin.copy:
+        dest: /opt/elk/logstash/log4j2.properties
+        content: |
+          logger.elasticsearchoutput.name = logstash.outputs.elasticsearch
+          logger.elasticsearchoutput.level = debug
+        owner: root
+        group: root
+        mode: '0644'
+  
+    - name: Создать конфигурационный файл pipelines.yml для Logstash
+      ansible.builtin.copy:
+        dest: /opt/elk/logstash/pipelines.yml
+        content: |
+          - pipeline.id: service_stamped_json_logs
+            pipeline.workers: 1
+            pipeline.batch.size: 1
+            path.config: "/usr/share/logstash/config/pipelines/service_stamped_json_logs.conf"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создать конфигурационный файл kibana.yml
+      ansible.builtin.copy:
+        dest: /opt/elk/kibana/kibana.yml
+        content: |
+          server.name: kibana
+          server.host: 0.0.0.0
+          server.publicBaseUrl: "http://localhost:5601"
+          monitoring.ui.container.elasticsearch.enabled: true # Для корректного сбора метрик с Elasticsearch, запущенного в контейнере
+          elasticsearch.hosts: [ "http://192.168.1.139:9200" ]
+          elasticsearch.username: elastic
+          elasticsearch.password: MyPw123
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создать Docker Compose файл для ELK
+      ansible.builtin.copy:
+        dest: /opt/elk/docker-compose.yml
+        content: |
+          version: '3.7'
+          services:
+            elasticsearch:
+              image: elasticsearch:7.16.1
+              container_name: elasticsearch
+              environment:
+                - discovery.type=single-node
+                - ELASTIC_USERNAME=elastic
+                - ELASTIC_PASSWORD=MyPw123
+              volumes:
+                - ./elasticsearch:/usr/share/elasticsearch/config
+                - ./elasticsearch:/usr/share/elasticsearch/data
+                - /opt/elk/elasticsearch/config/jvm.options:/usr/share/elasticsearch/config/jvm.options
+              ports:
+                - "9200:9200"
+                - "9300:9300"
+              networks:
+                - elk
+
+            logstash:
+              image: logstash:7.16.2
+              container_name: logstash
+              volumes:
+                - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
+                - ./logstash/pipeline:/usr/share/logstash/pipeline
+              ports:
+                - "5044:5044"
+                - "5000:5000"
+                - "9600:9600"
+                - "5140:5140"
+              networks:
+                - elk
+              depends_on:
+                - elasticsearch
+
+            kibana:
+              image: kibana:7.16.1
+              container_name: kibana
+              ports:
+                - "5601:5601"
+              volumes:
+                - ./kibana:/usr/share/kibana/config
+              networks:
+                - elk
+              depends_on:
+                - elasticsearch
+
+          networks:
+            elk:
+              driver: bridge
+
+    - name: Запуск Docker Compose в директории
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose up -d
+        chdir: /opt/elk
+
+    - name: Проверка статуса контейнеров
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose ps
+        chdir: /opt/elk
+      register: docker_compose_status
+
+    - name: Вывод статуса контейнеров для отладки
+      ansible.builtin.debug:
+        msg: "{{ docker_compose_status.stdout_lines }}"

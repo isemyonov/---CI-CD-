@@ -1,0 +1,105 @@
+---
+- name: Install Node Exporter using Docker Compose on CentOS 7
+  hosts: all
+  become: true
+  tasks:
+    - name: Установить необходимые системные пакеты
+      ansible.builtin.yum:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
+
+    - name: Добавить репозиторий Docker CE
+      ansible.builtin.yum_repository:
+        name: docker-ce
+        description: Docker CE Repository
+        baseurl: https://download.docker.com/linux/centos/9/x86_64/stable
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: yes
+
+    - name: Установить Docker CE
+      ansible.builtin.yum:
+        name: docker-ce
+        state: present
+
+    - name: Запустить и включить службу Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Получить архитектуру системы
+      ansible.builtin.command:
+        cmd: uname -m
+      register: uname_arch
+
+    - name: Получить тип операционной системы
+      ansible.builtin.command:
+        cmd: uname -s
+      register: uname_os
+
+    - name: Установить URL-адрес для загрузки Docker Compose
+      set_fact:
+        docker_compose_url: "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-{{ uname_os.stdout }}-{{ uname_arch.stdout }}"
+
+    - name: Скачать Docker Compose
+      ansible.builtin.get_url:
+        url: "{{ docker_compose_url }}"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Проверить установку Docker Compose
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose --version
+      register: docker_compose_version
+      failed_when: docker_compose_version.rc != 0
+      changed_when: false
+
+
+    - name: Create directory for Docker Compose files
+      ansible.builtin.file:
+        path: /opt/node_exporter
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create Docker Compose file for Node Exporter
+      ansible.builtin.copy:
+        dest: /opt/node_exporter/docker-compose.yml
+        content: |
+          version: '3.7'
+          services:
+            node_exporter:
+              image: prom/node-exporter:latest
+              container_name: node_exporter
+              ports:
+                - "9100:9100"
+              restart: always
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: List directory contents for verification
+      ansible.builtin.command: ls -l /opt/node_exporter
+      register: ls_output
+
+    - name: Debug directory listing
+      ansible.builtin.debug:
+        msg: "{{ ls_output.stdout_lines }}"
+
+    - name: Change directory to /opt/node_exporter and start Docker Compose
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose up -d
+        chdir: /opt/node_exporter
+
+    - name: Verify Node Exporter container is running
+      ansible.builtin.command: docker ps --filter "name=node_exporter" --format "{{ '{{' }}.Status{{ '}}' }}"
+      register: node_exporter_status
+
+    - name: Debug Node Exporter status
+      ansible.builtin.debug:
+        msg: "Node Exporter status: {{ node_exporter_status.stdout }}"

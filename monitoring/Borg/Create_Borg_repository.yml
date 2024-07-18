@@ -1,0 +1,13 @@
+- name: Create Borg repository directory
+  hosts: all
+  become: true
+
+  vars:
+    borg_repo: /BorgBackup/Monitoring
+
+  tasks:
+    - name: Initialize Borg repository
+      command: borg init -e none "{{ borg_repo }}"
+      args:
+        creates: "{{ borg_repo }}/data"
+      become_user: borguser

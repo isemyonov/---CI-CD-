@@ -1,0 +1,255 @@
+- name: Установка Grafana и Prometheus с использованием Docker Compose на CentOS 7
+  hosts: all
+  become: true
+  tasks:
+    
+    - name: Установить необходимые системные пакеты
+      ansible.builtin.yum:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
+
+    - name: Добавить репозиторий Docker CE
+      ansible.builtin.yum_repository:
+        name: docker-ce
+        description: Docker CE Repository
+        baseurl: https://download.docker.com/linux/centos/9/x86_64/stable
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: yes
+
+    - name: Установить Docker CE
+      ansible.builtin.yum:
+        name: docker-ce
+        state: present
+
+    - name: Запустить и включить службу Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Получить архитектуру системы
+      ansible.builtin.command:
+        cmd: uname -m
+      register: uname_arch
+
+    - name: Получить тип операционной системы
+      ansible.builtin.command:
+        cmd: uname -s
+      register: uname_os
+
+    - name: Установить URL-адрес для загрузки Docker Compose
+      set_fact:
+        docker_compose_url: "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-{{ uname_os.stdout }}-{{ uname_arch.stdout }}"
+
+    - name: Скачать Docker Compose
+      ansible.builtin.get_url:
+        url: "{{ docker_compose_url }}"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Проверить установку Docker Compose
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose --version
+      register: docker_compose_version
+      failed_when: docker_compose_version.rc != 0
+      changed_when: false
+
+    - name: Создать каталоги
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      with_items:
+        - /opt/Monitoring/alertmanager
+        - /opt/Monitoring/grafana
+        - /opt/Monitoring/prometheus/alerts
+
+    - name: Создание файла конфигурации prometheus.yml
+      ansible.builtin.copy:
+        dest: /opt/Monitoring/prometheus/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+            
+            - job_name: 'Bitwarden'
+              static_configs:
+                - targets: ['192.168.1.6:9100']
+            
+            - job_name: 'Monitoring'
+              static_configs:
+                - targets: ['192.168.1.138:9100']
+
+            - job_name: 'ELK_Stack'
+              static_configs:
+                - targets: ['192.168.1.139:9100']
+
+            - job_name: 'Nginx'
+              static_configs:
+                - targets: ['192.168.1.7:9100']
+
+            - job_name: 'BorgBackup'
+              static_configs:
+                - targets: ['192.168.1.145:9100']
+
+            - job_name: 'jira [nod_1]'
+              static_configs:
+                - targets: ['192.168.1.150:9100']
+
+            - job_name: 'jira [nod_2]'
+              static_configs:
+                - targets: ['192.168.1.151:9100']
+
+            - job_name: 'jira [nfs_1]'
+              static_configs:
+                - targets: ['192.168.1.152:9100'] 
+
+            - job_name: 'jira [PostgreSQL_1]'
+              static_configs:
+                - targets: ['192.168.1.153:9100']
+
+            - job_name: 'jira [PostgreSQL_2]'
+              static_configs:
+                - targets: ['192.168.1.155:9100']
+                         
+          rule_files:
+            - "/etc/prometheus/alerts/alert_rules.yml"
+          alerting:
+            alertmanagers:
+              - static_configs:
+                  - targets:
+                      - 192.168.1.138:9093
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создание файла конфигурации alert_rules.yml
+      ansible.builtin.copy:
+        dest: /opt/Monitoring/prometheus/alerts/alert_rules.yml
+        content: |
+          groups:
+          - name: example
+            rules:
+            - alert: InstanceDown
+              expr: up == 0
+              for: 1m
+              labels:
+                severity: page
+              annotations:
+                 summary: "Instance {{ '{{' }} $labels.instance }} down"
+                 description: "{{ '{{' }} $labels.instance }} of job {{ '{{' }} $labels.job }} has been down for more than 1 minute."
+        owner: root
+        group: root
+        mode: '0644'
+      #ignore_errors: yes
+    
+    - name: Создание файла конфигурации alertmanager.yml
+      ansible.builtin.copy:
+        dest: /opt/Monitoring/alertmanager/alertmanager.yml
+        content: |
+          global:
+            resolve_timeout: 1m
+          route:
+            group_by: ['alertname']
+            group_wait: 30s
+            group_interval: 1m
+            repeat_interval: 1h
+            receiver: 'telegram'
+          receivers:
+            - name: 'telegram'
+              telegram_configs:
+                - api_url: 'https://api.telegram.org'
+                  bot_token: 7241591247:AAH9Psp1wGPk9yX0Nhtfz6yb3K2Mt4dDqQ4
+                  chat_id: -1002221120547
+        owner: root
+        group: root
+        mode: '0644'
+        
+
+    - name: Создание env-файла для Grafana
+      ansible.builtin.copy:
+        dest: /opt/Monitoring/grafana/config.monitoring
+        content: |
+          GF_SECURITY_ADMIN_USER=admin
+          GF_SECURITY_ADMIN_PASSWORD=admin
+          GF_SERVER_HTTP_PORT=3000
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создание конфигурационного файла grafana.ini
+      ansible.builtin.copy:
+        dest: /opt/Monitoring/grafana/grafana.ini
+        content: |
+          [server]
+          http_port = 3000
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Создание файла Docker Compose
+      ansible.builtin.copy:
+        dest: /opt/Monitoring/docker-compose.yml
+        content: |
+          version: '3.7'
+          volumes:
+            prometheus_data:
+            grafana_data:
+          services:
+            prometheus:
+              image: prom/prometheus:v2.42.0
+              ports:
+                - '9090:9090'
+              volumes:
+                - ./prometheus/:/etc/prometheus/
+                - prometheus_data:/prometheus
+                - /etc/hosts:/etc/hosts
+              command:
+                - '--config.file=/etc/prometheus/prometheus.yml'
+                - '--storage.tsdb.path=/prometheus'
+              restart: always
+            alertmanager:
+              image: prom/alertmanager:v0.25.0
+              ports:
+                - '9093:9093'
+              volumes:
+                - ./alertmanager/:/etc/alertmanager/
+              command:
+                - '--config.file=/etc/alertmanager/alertmanager.yml'
+                - '--storage.path=/alertmanager'
+              restart: always
+            grafana:
+              image: grafana/grafana
+              ports:
+                - '3000:3000'
+              volumes:
+                - grafana_data:/var/lib/grafana
+                - ./grafana/provisioning/:/etc/grafana/provisioning/
+                - ./grafana/grafana.ini:/etc/grafana/grafana.ini
+              env_file:
+                - /opt/Monitoring/grafana/config.monitoring
+              restart: always
+
+    - name: Запуск Docker Compose в директории /opt/Monitoring
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose up -d
+        chdir: /opt/Monitoring
+
+    - name: Проверка статуса контейнеров
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose ps
+        chdir: /opt/Monitoring
+      register: docker_compose_status
+
+    - name: Вывод статуса контейнеров для отладки
+      ansible.builtin.debug:
+        msg: "{{ docker_compose_status.stdout_lines }}"

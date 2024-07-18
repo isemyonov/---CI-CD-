@@ -1,0 +1,68 @@
+---
+
+- name: Install and configure BorgBackup client
+  hosts: all
+  become: true
+
+  vars:
+    ssh_private_key_src: /home/semaphore/ssh/borgbackup/id_rsa
+    ssh_private_key_dest: /root/.ssh/id_rsa
+    borg_repo: borguser@192.168.1.145:/BorgBackup/jira_cluster_nfs_1
+    borg_host: 192.168.1.145
+
+  tasks:
+    - name: Ensure the extra packages for Enterprise Linux (EPEL) repository is present
+      yum:
+        name: epel-release
+        state: present
+
+    - name: Install BorgBackup
+      yum:
+        name: borgbackup
+        state: present
+
+    - name: Ensure .ssh directory exists for root
+      file:
+        path: /root/.ssh
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Copy SSH private key to client
+      copy:
+        src: "{{ ssh_private_key_src }}"
+        dest: "{{ ssh_private_key_dest }}"
+        owner: root
+        group: root
+        mode: '0600'
+      notify: reload_ssh
+
+    - name: Add the Borg server to known_hosts
+      ansible.builtin.shell: |
+        ssh-keyscan -H {{ borg_host }} >> /root/.ssh/known_hosts
+      ignore_errors: true
+
+    - name: Create script for listing borg repository with auto-confirmation
+      copy:
+        content: |
+          #!/bin/bash
+          export BORG_RSH="ssh -i {{ ssh_private_key_dest }}"
+          echo -e "y\n" | borg list {{ borg_repo }}
+        dest: /root/borg_list.sh
+        mode: '0755'
+
+    - name: Run script to list borg repository
+      command: /root/borg_list.sh
+      ignore_errors: true
+
+  handlers:
+    - name: reload_ssh
+      service:
+        name: sshd
+        state: reloaded
+
+    - name: restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted

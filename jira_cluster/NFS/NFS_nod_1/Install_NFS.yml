@@ -1,0 +1,38 @@
+---
+- name: Установка и настройка NFS сервера на CentOS 9
+  hosts: all
+  become: yes
+  tasks:
+    - name: Установка пакета nfs-utils
+      dnf:
+        name: nfs-utils
+        state: present
+
+    - name: Создание директории /jira
+      file:
+        path: /jira
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Настройка экспорта NFS
+      blockinfile:
+        path: /etc/exports
+        block: |
+          /jira *(rw,sync,no_root_squash)
+
+    - name: Включение и запуск службы nfs-server
+      systemd:
+        name: nfs-server
+        enabled: yes
+        state: started
+
+    - name: Обновление экспорта NFS
+      command: exportfs -r
+
+    - name: Разрешение сервиса NFS в firewall
+      command: firewall-cmd --permanent --zone=public --add-service=nfs
+
+    - name: Перезагрузка firewall для применения изменений
+      command: firewall-cmd --reload

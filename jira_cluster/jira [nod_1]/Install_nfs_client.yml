@@ -1,0 +1,32 @@
+---
+
+- name: Настройка NFS клиента на CentOS 9
+  hosts: all
+  become: yes
+  tasks:
+    - name: Установка пакета nfs-utils
+      dnf:
+        name: nfs-utils
+        state: present
+
+    - name: Создание директории /opt/jira_nfs
+      file:
+        path: /opt/jira_nfs
+        state: directory
+        owner: root
+        group: root
+        mode: '0777'
+
+    - name: Монтирование NFS директории
+      mount:
+        src: 192.168.1.152:/jira
+        path: /opt/jira_nfs
+        fstype: nfs
+        opts: defaults
+        state: mounted
+
+    - name: Добавление NFS директории в /etc/fstab
+      blockinfile:
+        path: /etc/fstab
+        block: |
+          192.168.1.152:/jira  /opt/jira_nfs  nfs  defaults  0  0

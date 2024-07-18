@@ -1,0 +1,128 @@
+- name: Установка PostgreSQL
+  hosts: all
+  become: true
+  tasks:
+    
+    - name: Установить необходимые системные пакеты
+      ansible.builtin.yum:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
+
+    - name: Добавить репозиторий Docker CE
+      ansible.builtin.yum_repository:
+        name: docker-ce
+        description: Docker CE Repository
+        baseurl: https://download.docker.com/linux/centos/9/x86_64/stable
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: yes
+
+    - name: Установить Docker CE
+      ansible.builtin.yum:
+        name: docker-ce
+        state: present
+
+    - name: Запустить и включить службу Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Получить архитектуру системы
+      ansible.builtin.command:
+        cmd: uname -m
+      register: uname_arch
+
+    - name: Получить тип операционной системы
+      ansible.builtin.command:
+        cmd: uname -s
+      register: uname_os
+
+    - name: Установить URL-адрес для загрузки Docker Compose
+      set_fact:
+        docker_compose_url: "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-{{ uname_os.stdout }}-{{ uname_arch.stdout }}"
+
+    - name: Скачать Docker Compose
+      ansible.builtin.get_url:
+        url: "{{ docker_compose_url }}"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Проверить установку Docker Compose
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose --version
+      register: docker_compose_version
+      failed_when: docker_compose_version.rc != 0
+      changed_when: false
+
+    - name: Создать каталоги
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: systemd-coredump
+        group: input
+        mode: '0766'
+      with_items:
+        - /opt/PostgreSQL/standby_data
+
+    - name: Создание файла Docker Compose
+      ansible.builtin.copy:
+        dest: /opt/PostgreSQL/docker-compose.yml
+        content: |
+          version: '3.8'
+          services:
+      
+            postgres-standby:
+              image:  postgres:16
+              container_name: postgres-standby
+              environment:
+                POSTGRES_USER: postgres
+                POSTGRES_PASSWORD: 12345678
+                POSTGRES_DB: postgres
+                PGPASSWORD: 12345678  # Добавляем переменную окружения для pg_basebackup
+              volumes:
+                - ./standby_data:/var/lib/postgresql/data
+              ports:
+                - "5433:5432"
+              networks:
+                - postgres-net
+                 
+          networks:
+            postgres-net:
+              driver: bridge
+ 
+    - name: Запуск Docker Compose в директории
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose up -d
+        chdir: /opt/PostgreSQL
+
+    - name: Остановка Docker Compose в директории
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose stop
+        chdir: /opt/PostgreSQL
+
+    - name: Add standby_mode and primary_conninfo to postgresql.conf
+      ansible.builtin.blockinfile:
+        path: /opt/PostgreSQL/standby_data/postgresql.conf
+        backup: yes
+        block: |
+          # Added for standby replication
+          primary_conninfo = 'host=192.168.1.153 port=5432 user=postgres password=12345678'
+
+    - name: Запуск Docker Compose в директории
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose up -d
+        chdir: /opt/PostgreSQL
+
+    - name: Проверка статуса контейнеров
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose ps
+        chdir: /opt/PostgreSQL
+      register: docker_compose_status
+
+    - name: Вывод статуса контейнеров для отладки
+      ansible.builtin.debug:
+        msg: "{{ docker_compose_status.stdout_lines }}"

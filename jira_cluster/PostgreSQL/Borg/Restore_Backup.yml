@@ -1,0 +1,50 @@
+---
+- name: Restore from the latest BorgBackup
+  hosts: all
+  become: true
+
+  vars:
+    borg_repo: borguser@192.168.1.145:/BorgBackup/jira_cluster_postgreSQL_1  # Путь к репозиторию Borg на сервере
+    restore_dest: /var/lib/docker/volumes  # Целевая директория для восстановления
+    strip_components: 4  # Количество компонентов пути для удаления
+    docker_compose_file: /opt/PostgreSQL/docker-compose.yml  # Путь к файлу docker-compose.yml
+    docker_container_name: db  # Имя Docker контейнера, который нужно остановить и запустить
+
+  tasks:
+    
+    - name: Stop the Docker container using docker-compose
+      ansible.builtin.shell:
+        cmd: docker compose -f "{{ docker_compose_file }}" stop "{{ docker_container_name }}"
+      ignore_errors: true
+
+    - name: Ensure the restore destination directory exists
+      file:
+        path: "{{ restore_dest }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Find the latest backup archive
+      shell: borg list "{{ borg_repo }}" --last 1 --short
+      register: latest_backup
+
+    - name: Extract the latest backup
+      shell: borg extract --list --strip-components "{{ strip_components }}" "{{ borg_repo }}::{{ latest_backup.stdout.strip() }}"
+      args:
+        chdir: "{{ restore_dest }}"
+      become_user: root
+
+    - name: Start the Docker container using docker-compose
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ docker_compose_file }}" up -d "{{ docker_container_name }}"
+      register: start_container
+
+    - name: Check Docker container status
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ docker_compose_file }}" ps
+      register: docker_compose_status
+
+    - name: Output Docker container status for debugging
+      ansible.builtin.debug:
+        var: docker_compose_status.stdout_lines

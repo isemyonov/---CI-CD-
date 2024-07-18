@@ -1,0 +1,106 @@
+---
+- name: create_user_Recovery 
+  hosts: 192.168.1.150
+  become: true
+
+  vars:
+    ssh_public_key_src: /home/semaphore/ssh/borgbackup/id_rsa.pub
+    ssh_public_key_dest: /home/recovery/.ssh/authorized_keys
+
+  tasks:
+    - name: Create recovery user
+      user:
+        name: recovery
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: "/home/recovery/.ssh"
+        state: directory
+        owner: recovery
+        group: recovery
+        mode: '0700'
+
+    - name: Copy SSH public key to server for recovery
+      copy:
+        src: "{{ ssh_public_key_src }}"
+        dest: "{{ ssh_public_key_dest }}"
+        owner: recovery
+        group: recovery
+        mode: '0600'
+      notify: reload_ssh
+      
+    - name: Ensure user 'recovery' has sudo privileges without password
+      ansible.builtin.copy:
+        content: "recovery ALL=(ALL) NOPASSWD:ALL\n"
+        dest: /etc/sudoers.d/recovery
+        owner: root
+        group: root
+        mode: '0440'
+
+  handlers:
+    - name: reload_ssh
+      service:
+        name: sshd
+        state: reloaded
+
+    - name: restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
+
+
+
+- name: create_user_Recovery 
+  hosts: 192.168.1.151
+  become: true
+
+  vars:
+    ssh_private_key_src: /home/semaphore/ssh/borgbackup/id_rsa
+    ssh_private_key_dest: /home/recovery/.ssh/id_rsa
+    recovery_host: 192.168.1.150
+  tasks:        
+    - name: Create recovery user
+      user:
+        name: recovery
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: "/home/recovery/.ssh"
+        state: directory
+        owner: recovery
+        group: recovery
+        mode: '0700'
+    
+    - name: Copy SSH private key to client
+      copy:
+        src: "{{ ssh_private_key_src }}"
+        dest: "{{ ssh_private_key_dest }}"
+        owner: recovery
+        group: recovery
+        mode: '0600'
+      notify: reload_ssh
+
+    - name: Ensure user 'recovery' has sudo privileges without password
+      ansible.builtin.copy:
+        content: "recovery ALL=(ALL) NOPASSWD:ALL\n"
+        dest: /etc/sudoers.d/recovery
+        owner: root
+        group: root
+        mode: '0440'
+
+  handlers:
+    - name: reload_ssh
+      service:
+        name: sshd
+        state: reloaded
+
+    - name: restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
+
+    

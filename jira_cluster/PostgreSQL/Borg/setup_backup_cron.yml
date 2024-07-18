@@ -1,0 +1,38 @@
+- name: Set up BorgBackup script and daily cron job
+  hosts: all
+  become: true
+
+  vars:
+    backup_source: /var/lib/docker/volumes/postgresql_postgres-data  # Путь к директории, которую вы хотите забэкапить
+    backup_name: jira_cluster_postgreSQL_1
+    backup_destination: borguser@192.168.1.145:/BorgBackup/jira_cluster_postgreSQL_1  # Замена на реальные значения
+    
+  tasks:
+    
+    - name: Создать каталоги
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      with_items:
+        - /opt/scripts
+        
+    - name: Create backup script
+      copy:
+        content: |
+          borg create --list -C zstd {{ backup_destination }}::{{ backup_name }}-`date +%Y%m%d_%H%M%S` {{ backup_source }}
+          borg prune --list --keep-last 3 {{ backup_destination }}
+        dest: /opt/scripts/borgbackup.sh
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Add cron job for daily backup at 1 AM
+      cron:
+        name: "Daily BorgBackup"
+        user: root
+        minute: "0"
+        hour: "1"
+        job: "/opt/scripts/borgbackup.sh"

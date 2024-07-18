@@ -1,0 +1,53 @@
+---
+- name: Recovery_jira_nod_2
+  hosts: all
+  become: true
+  
+  vars:
+    docker_compose_file: /opt/jira/docker-compose.yml  # Путь к файлу docker-compose.yml
+    docker_container_name: jira  # Имя Docker контейнера, который нужно остановить и запустить
+  
+  tasks:
+
+    - name: Stop the Docker container using docker-compose
+      ansible.builtin.shell:
+        cmd: docker compose -f "{{ docker_compose_file }}" stop "{{ docker_container_name }}"
+      ignore_errors: true
+
+    - name: Synchronize directory using rsync with sudo
+      command: >
+        rsync -avz -e "ssh -o StrictHostKeyChecking=no -i /home/recovery/.ssh/id_rsa" --rsync-path="sudo rsync" recovery@192.168.1.150:/opt/jira/jira_nfs/ /opt/jira/jira_nfs/
+      ignore_errors: yes
+
+    - name: Ensure correct owner and group
+      file:
+        path: /opt/jira/jira_nfs/
+        state: directory
+        owner: 2001
+        group: 2001
+        recurse: yes
+
+    - name: Edit cluster.properties file
+      replace:
+        path: /opt/jira/jira_nfs/cluster.properties
+        regexp: '^jira.node.id = node1'
+        replace: 'jira.node.id = node2'
+        #backup: yes
+        owner: 2001
+        group: 2001
+
+    - name: Start the Docker container using docker-compose
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ docker_compose_file }}" up -d "{{ docker_container_name }}"
+      register: start_container
+
+    - name: Check Docker container status
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ docker_compose_file }}" ps
+      register: docker_compose_status
+
+    - name: Output Docker container status for debugging
+      ansible.builtin.debug:
+        var: docker_compose_status.stdout_lines
+    
+

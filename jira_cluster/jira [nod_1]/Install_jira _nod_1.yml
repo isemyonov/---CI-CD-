@@ -1,0 +1,113 @@
+- name: Установка jira
+  hosts: all
+  become: true
+  tasks:
+    - name: Установить необходимые системные пакеты
+      ansible.builtin.yum:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
+
+    - name: Добавить репозиторий Docker CE
+      ansible.builtin.yum_repository:
+        name: docker-ce
+        description: Docker CE Repository
+        baseurl: https://download.docker.com/linux/centos/9/x86_64/stable
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: yes
+
+    - name: Установить Docker CE
+      ansible.builtin.yum:
+        name: docker-ce
+        state: present
+
+    - name: Запустить и включить службу Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Получить архитектуру системы
+      ansible.builtin.command:
+        cmd: uname -m
+      register: uname_arch
+
+    - name: Получить тип операционной системы
+      ansible.builtin.command:
+        cmd: uname -s
+      register: uname_os
+
+    - name: Установить URL-адрес для загрузки Docker Compose
+      set_fact:
+        docker_compose_url: "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-{{ uname_os.stdout }}-{{ uname_arch.stdout }}"
+
+    - name: Скачать Docker Compose
+      ansible.builtin.get_url:
+        url: "{{ docker_compose_url }}"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Проверить установку Docker Compose
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose --version
+      register: docker_compose_version
+      failed_when: docker_compose_version.rc != 0
+      changed_when: false
+
+    - name: Создать каталоги
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0777'
+      with_items:
+        - /opt/jira/jira_nfs
+
+    - name: Создание файла Docker Compose
+      ansible.builtin.copy:
+        dest: /opt/jira/docker-compose.yml
+        content: |
+          version: '3.7'
+          services:
+            jira:
+              image: atlassian/jira-software:8.22.0
+              container_name: jira
+              volumes:
+                - /opt/jira/jira_nfs:/var/atlassian/application-data/jira:rw
+                - /opt/jira_nfs:/var/jira:rw
+           
+              ports:
+                - '8090:8080'
+                - '8091:8081'
+              environment:
+                - 'ATL_JDBC_URL=jdbc:postgresql://192.168.1.153:5432/jira'
+                - 'ATL_JDBC_USER=postgres'
+                - 'ATL_JDBC_PASSWORD=12345678'
+                - 'SETENV_JVM_MINIMUM_MEMORY=2048m'
+                - 'SETENV_JVM_MAXIMUM_MEMORY=4096m'
+                - 'JIRA_PROXY_NAME=jira.isemyonov.ru'
+                - 'JIRA_PROXY_PORT=443'
+                - 'JIRA_PROXY_SCHEME=https'
+                - 'VIRTUAL_HOST=jira.subbnet.ru'
+                - 'VIRTUAL_PORT=8080'
+                - 'JVM_MINIMUM_MEMORY=2000m'
+                - 'JVM_MAXIMUM_MEMORY=4000m'
+   
+    - name: Запуск Docker Compose в директории
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose up -d
+        chdir: /opt/jira
+
+    - name: Проверка статуса контейнеров
+      ansible.builtin.shell:
+        cmd: /usr/local/bin/docker-compose ps
+        chdir: /opt/jira
+      register: docker_compose_status
+
+    - name: Вывод статуса контейнеров для отладки
+      ansible.builtin.debug:
+        msg: "{{ docker_compose_status.stdout_lines }}"

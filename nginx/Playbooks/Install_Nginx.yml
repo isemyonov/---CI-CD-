@@ -1,0 +1,47 @@
+---
+- name: Install and Configure Nginx on CentOS 9
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Ensure EPEL repository is installed
+      yum:
+        name: epel-release
+        state: present
+
+    - name: Install Nginx
+      yum:
+        name: 
+          - certbot
+          - python3-certbot-nginx
+          - nginx
+        state: present
+
+    - name: Start and enable Nginx service
+      systemd:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Configure firewall to allow HTTP and HTTPS traffic
+      firewalld:
+        service: "{{ item }}"
+        permanent: true
+        state: enabled
+      with_items:
+        - http
+        - https
+
+    - name: Reload firewalld
+      command: firewall-cmd --reload
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Disable firewalld
+      systemd:
+        name: firewalld
+        state: stopped
+        enabled: false
+
+    - name: Disable SELinux
+      selinux:
+        state: disabled

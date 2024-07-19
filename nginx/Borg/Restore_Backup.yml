@@ -1,0 +1,46 @@
+---
+- name: Restore from the latest BorgBackup
+  hosts: all
+  become: true
+
+  vars:
+    borg_repo: borguser@192.168.1.145:/BorgBackup/Nginx  # Путь к репозиторию Borg на сервере
+    restore_dest: /etc # Целевая директория для восстановления
+    strip_components: 1  # Количество компонентов пути для удаления
+
+  tasks:
+    
+    - name: Ensure the restore destination directory exists
+      file:
+        path: "{{ restore_dest }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Find the latest backup archive
+      shell: borg list "{{ borg_repo }}" --last 1 --short
+      register: latest_backup
+
+    - name: Extract the latest backup
+      shell: borg extract --list --strip-components "{{ strip_components }}" "{{ borg_repo }}::{{ latest_backup.stdout.strip() }}"
+      args:
+        chdir: "{{ restore_dest }}"
+      become_user: root
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      register: nginx_test
+      ignore_errors: yes
+
+    - name: Fail if Nginx configuration test failed
+      fail:
+        msg: "Nginx configuration test failed"
+      when: nginx_test.rc != 0
+
+    - name: Reload Nginx to apply configuration changes
+      systemd:
+        name: nginx
+        state: reloaded
+      when: nginx_test.rc == 0
+
